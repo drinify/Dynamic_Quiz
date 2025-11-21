@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Explorer Quiz</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Load Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        setLogLevel('Debug');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-quiz-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        let app, db, auth, userId = 'anonymous';
+
+        $(document).ready(function() {
+            if (firebaseConfig) {
+                try {
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    onAuthStateChanged(auth, (user) => {
+                        if (user) { userId = user.uid; $('#current-user-id').text(userId); }
+                    });
+                    const signInPromise = initialAuthToken ? signInWithCustomToken(auth, initialAuthToken) : signInAnonymously(auth);
+                    signInPromise.catch(e => console.error("Auth failed:", e));
+                } catch (e) {
+                    console.error("Firebase Init Failed:", e);
+                }
+            }
+            window.db = db;
+            window.appId = appId;
+            window.getUserId = () => auth?.currentUser?.uid || userId;
+            
+            // Start the application on the sign-up view
+            $('#signup-view').show();
+            
+            // Initial validation check to disable button
+            checkFormValidity();
+        });
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        /* Creative Background: Subtle texture for a "notebook" feel */
+        .page-background { 
+            background-color: #f7fafc; /* light blue-gray */
+            background-image: linear-gradient(90deg, #e2e8f0 1px, transparent 1px), 
+                              linear-gradient(180deg, #e2e8f0 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+        .card { 
+            background-color: white; 
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 0 0 5px #3b82f6; /* Blue border effect */
+            border-radius: 1rem;
+            border: 2px solid #3b82f6; /* Accent border */
+        }
+        .input-field { 
+            transition: border-color 0.3s, box-shadow 0.3s;
+            border-width: 2px;
+            border-color: #93c5fd; /* Default light blue border */
+        }
+        .option-button { 
+            transition: all 0.2s; 
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .option-button:hover:not(:disabled) { 
+            transform: scale(1.01); 
+            background-color: #eff6ff; /* Very light blue on hover */
+        }
+        /* Style for the selected state before submission */
+        .option-button.selected {
+            background-color: #4f46e5; /* Indigo-600 */
+            color: white;
+            border-color: #4f46e5;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
+        }
+        
+        .question-card { 
+            border-radius: 0.75rem;
+            margin-bottom: 1.5rem;
+            background-color: #f0f9ff; /* Very light blue background */
+            box-shadow: inset 0 0 0 2px #93c5fd; /* Inner blue line */
+            transition: box-shadow 0.3s ease;
+            position: relative; /* Needed for absolute positioning of the label */
+        }
+        /* Error state class for question card */
+        .question-card.error-highlight {
+            box-shadow: inset 0 0 0 3px #ef4444 !important; /* Red border */
+            animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        /* New CSS for the "Required" label */
+        .required-label {
+            display: none; /* Hidden by default */
+            position: absolute;
+            top: -12px;
+            right: 20px;
+            background-color: #ef4444; /* Red bg */
+            color: white;
+            font-size: 0.75rem; /* text-xs */
+            font-weight: 700; /* font-bold */
+            text-transform: uppercase;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px; /* rounded-full */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+
+        /* Show label when parent has error-highlight class */
+        .question-card.error-highlight .required-label {
+            display: block;
+        }
+        
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+    </style>
+</head>
+<body class="page-background text-gray-800 min-h-screen flex items-center justify-center p-4">
+
+    <!-- Global Message Box -->
+    <div id="message-box" class="fixed top-4 left-1/2 -translate-x-1/2 p-3 bg-red-500 text-white rounded-lg shadow-xl z-50 hidden"></div>
+
+    <div class="w-full max-w-2xl">
+
+        <!-- 1. Sign-up Form View (Initial View) -->
+        <div id="signup-view" class="card p-8 space-y-6 hidden max-w-lg mx-auto">
+            <h1 class="text-4xl font-black text-indigo-700 text-center border-b-4 border-indigo-300 pb-2">
+                🚀 Welcome!
+            </h1>
+            <p class="text-gray-600 text-center">Fill out the form to start your knowledge journey.</p>
+            
+            <form id="signup-form" class="space-y-4">
+                <!-- Name Input -->
+                <div>
+                    <label for="name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                    <input type="text" id="name" required placeholder="Jane Doe" class="input-field mt-1 block w-full px-4 py-2 bg-gray-50 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    <span class="error-message text-xs mt-1 block h-4"></span>
+                </div>
+                <!-- Course & Section Input -->
+                <div>
+                    <label for="course-section" class="block text-sm font-medium text-gray-700">Course & Section</label>
+                    <input type="text" id="course-section" required placeholder="BSIT - 4A" class="input-field mt-1 block w-full px-4 py-2 bg-gray-50 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    <span class="error-message text-xs mt-1 block h-4"></span>
+                </div>
+                <!-- Email Input -->
+                <div>
+                    <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                    <input type="email" id="email" required placeholder="jane.doe@school.edu" class="input-field mt-1 block w-full px-4 py-2 bg-gray-50 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    <span class="error-message text-xs mt-1 block h-4"></span>
+                </div>
+                
+                <button type="submit" id="start-quiz-btn" disabled
+                        class="w-full py-3 bg-gray-400 text-gray-800 font-black rounded-full transition duration-150 ease-in-out disabled:opacity-70">
+                    Start Quiz
+                </button>
+            </form>
+            
+            <!-- User ID Footer -->
+            <div class="text-xs text-gray-400 text-center pt-2 border-t border-gray-200 mt-4">Session ID: <span id="current-user-id">Loading...</span></div>
+        </div>
+
+        <!-- 2. Quiz View (Hidden initially) -->
+        <div id="quiz-view" class="card p-8 space-y-6 hidden">
+            <h1 class="text-4xl font-black text-indigo-700 text-center border-b-4 border-indigo-300 pb-2">
+                🎓 Knowledge Explorer
+            </h1>
+
+            <!-- Quiz Header -->
+            <div class="flex justify-between items-center pb-4 pt-2 sticky top-0 bg-white z-10 border-b border-gray-100">
+                <div class="text-xl font-extrabold text-indigo-600">
+                    Questions: <span class="text-gray-500">10</span>
+                </div>
+                <!-- Score is hidden until submit, showing 0 or '?' initially -->
+                <div class="text-xl font-extrabold text-gray-700">
+                    Score: <span id="score-tally" class="text-gray-400">--</span>
+                </div>
+            </div>
+
+            <!-- Quiz Questions Container (Vertical List) -->
+            <div id="questions-container" class="space-y-6">
+                <!-- All 10 questions will be rendered here on startup -->
+            </div>
+
+            <!-- Submit Button (Always visible at bottom) -->
+            <div id="submit-container" class="pt-6 border-t border-gray-200 text-center">
+                <button id="submit-btn" class="py-3 px-10 bg-indigo-600 text-white text-lg font-black rounded-full hover:bg-indigo-700 shadow-lg shadow-indigo-500/50 transform transition hover:-translate-y-1">
+                    Submit Answers 📤
+                </button>
+            </div>
+
+            <!-- Result View (Hidden initially) -->
+            <div id="result-view" class="text-center space-y-4 hidden pt-6 border-t border-gray-200">
+                <h3 class="text-3xl font-black text-indigo-600">Quiz Complete!</h3>
+                <p class="text-2xl text-gray-700">Final Score: <span id="final-score" class="text-yellow-600 font-extrabold"></span>/10</p>
+                <p id="feedback-message" class="text-lg text-gray-600"></p>
+                <button onclick="location.reload()" class="mt-4 py-3 px-8 bg-pink-500 text-white font-black rounded-full shadow-lg hover:bg-pink-600">Start Over</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const quizQuestions = [
+            { question: "What does HTML stand for?", options: ["Hyper Text Markup Language", "High Tech Multi Language", "Home Tool Markup Language"], answer: "Hyper Text Markup Language", selected: null },
+            { question: "Which is a CSS preprocessor?", options: ["Sass", "TypeScript", "Babel", "Webpack"], answer: "Sass", selected: null },
+            { question: "What is the primary function of JavaScript?", options: ["Styling web pages", "Creating database schemas", "Adding interactivity", "Server management"], answer: "Adding interactivity", selected: null },
+            { question: "The 'key' in a JavaScript object is typically what data type?", options: ["Array", "Object", "String", "Number"], answer: "String", selected: null },
+            { question: "Which HTTP method is used to submit data to a specified resource?", options: ["GET", "POST", "PUT", "DELETE"], answer: "POST", selected: null },
+            { question: "What is the result of '5' + 3 in JavaScript?", options: ["8", "53", "NaN", "Error"], answer: "53", selected: null },
+            { question: "Which property changes the background color in CSS?", options: ["color", "background-color", "bgcolor", "background"], answer: "background-color", selected: null },
+            { question: "What is Git primarily used for?", options: ["Database storage", "Version control", "User authentication", "Image editing"], answer: "Version control", selected: null },
+            { question: "In Angular, what is the decorator used for components?", options: ["@Module", "@Injectable", "@Component", "@Pipe"], answer: "@Component", selected: null },
+            { question: "Which company created React?", options: ["Google", "Microsoft", "Facebook", "Amazon"], answer: "Facebook", selected: null }
+        ];
+
+        let isSubmitted = false;
+        
+        // --- Utility Functions ---
+        function showMessage(text, isError = false) {
+            const $msgBox = $('#message-box');
+            $msgBox.text(text).removeClass('hidden bg-red-500 bg-emerald-500').addClass(isError ? 'bg-red-500' : 'bg-emerald-500');
+            setTimeout(() => $msgBox.addClass('hidden'), 3000);
+        }
+        
+        // --- Validation Logic (Sign-Up) ---
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        let allInputsValid = false;
+
+        function checkFormValidity() {
+            let formValid = true;
+            $('#signup-form input').each(function() {
+                const $input = $(this);
+                const isEmail = $input.attr('id') === 'email';
+                const isValid = $input.val().trim() !== '' && (isEmail ? emailRegex.test($input.val().trim().toLowerCase()) : $input.val().trim().length >= 3);
+                if (!isValid) formValid = false;
+            });
+            
+            const $btn = $('#start-quiz-btn');
+            if (formValid) {
+                $btn.prop('disabled', false).removeClass('bg-gray-400 text-gray-800').addClass('bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-500/50');
+            } else {
+                $btn.prop('disabled', true).addClass('bg-gray-400 text-gray-800').removeClass('bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-500/50');
+            }
+            allInputsValid = formValid;
+        }
+
+        function validateInput($input) {
+            const value = $input.val().trim();
+            const isEmail = $input.attr('id') === 'email';
+            const $errorSpan = $input.closest('div').find('.error-message');
+            const isValid = value !== '' && (isEmail ? emailRegex.test(value.toLowerCase()) : value.length >= 3);
+
+            $input.removeClass('border-red-500 border-emerald-500 border-indigo-300').addClass(
+                isValid ? 'border-emerald-500' : 'border-red-500'
+            );
+            
+            if (value === '') {
+                $errorSpan.text('This field is required.').addClass('text-red-500').removeClass('text-emerald-500');
+            } else if (!isValid) {
+                $errorSpan.text(isEmail ? 'Invalid email format.' : 'Must be at least 3 characters.').addClass('text-red-500').removeClass('text-emerald-500');
+            } else {
+                $errorSpan.text('Valid.').addClass('text-emerald-500').removeClass('text-red-500');
+            }
+            checkFormValidity();
+        }
+
+        $('#signup-form input').on('keyup blur', function() {
+            validateInput($(this));
+        });
+        
+        // --- Firestore & Sign-Up Submission ---
+        $('#signup-form').on('submit', async function(e) {
+            e.preventDefault();
+            if (!allInputsValid) return showMessage("Please correct the validation errors.", true);
+
+            const profileData = { 
+                name: $('#name').val().trim(), 
+                courseSection: $('#course-section').val().trim(), 
+                email: $('#email').val().trim(), 
+                timestamp: new Date().toISOString() 
+            };
+            
+            const db = window.db;
+            const appId = window.appId;
+            const userId = window.getUserId();
+
+            if (db && userId !== 'anonymous') {
+                try {
+                    const profileDocRef = doc(db, `artifacts/${appId}/users/${userId}/quiz_profiles/user_profile`);
+                    await setDoc(profileDocRef, profileData);
+                    showMessage("Profile saved! Starting quiz.", false);
+                } catch (e) {
+                    console.error("Error saving profile:", e);
+                    showMessage("Error saving profile to database.", true);
+                }
+            }
+
+            $('#signup-view').fadeOut(500, () => {
+                renderAllQuestions(); 
+                $('#quiz-view').fadeIn(500);
+            });
+        });
+
+        // --- Quiz Logic ---
+        
+        function renderAllQuestions() {
+            const $container = $('#questions-container');
+            $container.empty();
+
+            quizQuestions.forEach((q, index) => {
+                const questionHtml = `
+                    <div id="q-card-${index}" class="question-card p-4 transition-all duration-300">
+                        <!-- "Required" Label -->
+                        <div class="required-label">Required</div>
+                        
+                        <!-- Question Header with Toggle -->
+                        <div class="pb-3 border-b border-blue-200 flex justify-between items-center">
+                            <p class="text-lg font-bold text-gray-700 flex-1 pr-4">${index + 1}. ${q.question}</p>
+                            <button class="toggle-btn text-indigo-600 hover:text-indigo-800 focus:outline-none p-1 rounded hover:bg-blue-100 transition-colors" title="Hide/Show Options">
+                                <span class="toggle-text text-xs font-bold uppercase tracking-wide">Hide</span>
+                            </button>
+                        </div>
+                        <!-- Collapsible Content -->
+                        <div class="question-content pt-3">
+                            <div class="options-group space-y-2">
+                                ${q.options.map(option => `
+                                    <button data-answer="${option}" data-q-index="${index}"
+                                            class="option-button w-full text-left p-3 bg-white border-2 border-indigo-300 text-gray-700 rounded-lg focus:outline-none text-sm hover:border-indigo-500">
+                                        ${option}
+                                    </button>
+                                `).join('')}
+                            </div>
+                            <div class="feedback-area mt-4 h-6 text-sm font-medium text-center"></div>
+                        </div>
+                    </div>
+                `;
+                $container.append(questionHtml);
+            });
+            
+            // Bind click event for options
+            $('.option-button').off('click').on('click', handleSelection);
+            
+            // Bind toggle event
+            $('.toggle-btn').off('click').on('click', handleToggle);
+        }
+
+        // Handle Show/Hide Toggle
+        function handleToggle() {
+            const $btn = $(this);
+            const $card = $btn.closest('.question-card');
+            const $content = $card.find('.question-content');
+            const $text = $btn.find('.toggle-text');
+            
+            $content.slideToggle(300, function() {
+                const isVisible = $(this).is(':visible');
+                $text.text(isVisible ? 'Hide' : 'Show');
+            });
+        }
+
+        // Handle Selection (Highlight Only, remove error style if present)
+        function handleSelection() {
+            if (isSubmitted) return; // Lock answers after submit
+
+            const $clicked = $(this);
+            const qIndex = $clicked.data('q-index');
+            const selectedOption = $clicked.data('answer');
+            const $card = $clicked.closest('.question-card');
+
+            // Remove error highlight if user selects an answer
+            $card.removeClass('error-highlight');
+
+            // Update state
+            quizQuestions[qIndex].selected = selectedOption;
+
+            // Visual: Reset all buttons in this group
+            const $group = $clicked.closest('.options-group');
+            $group.find('.option-button').removeClass('selected');
+            
+            // Visual: Highlight clicked button
+            $clicked.addClass('selected');
+        }
+        
+        // Handle Submit Button with Strict Validation
+        $('#submit-btn').on('click', function() {
+            if (isSubmitted) return;
+            
+            let allAnswered = true;
+            let firstErrorIndex = -1;
+
+            // 1. Validation Pass
+            quizQuestions.forEach((q, index) => {
+                const $card = $(`#q-card-${index}`);
+                
+                // Remove any existing error styling first
+                $card.removeClass('error-highlight');
+
+                if (q.selected === null) {
+                    allAnswered = false;
+                    $card.addClass('error-highlight'); // Add red border & show required label
+                    
+                    // If content is hidden, show it
+                    if (!$card.find('.question-content').is(':visible')) {
+                        $card.find('.question-content').slideDown();
+                        $card.find('.toggle-text').text('Hide');
+                    }
+
+                    if (firstErrorIndex === -1) firstErrorIndex = index;
+                }
+            });
+
+            if (!allAnswered) {
+                // Scroll to first error
+                if (firstErrorIndex !== -1) {
+                    $('html, body').animate({
+                        scrollTop: $(`#q-card-${firstErrorIndex}`).offset().top - 100
+                    }, 500);
+                }
+                return;
+            }
+
+            // 2. Grading Pass (Only reached if allAnswered is true)
+            isSubmitted = true;
+            let score = 0;
+
+            quizQuestions.forEach((q, index) => {
+                const $card = $(`#q-card-${index}`);
+                const $feedback = $card.find('.feedback-area');
+                const $userSelectedBtn = $card.find(`button[data-answer="${q.selected}"]`);
+                const $correctBtn = $card.find(`button[data-answer="${q.answer}"]`);
+                
+                // Disable all buttons
+                $card.find('.option-button').prop('disabled', true).addClass('cursor-not-allowed opacity-80');
+                // Disable toggles
+                $card.find('.toggle-btn').prop('disabled', true).addClass('opacity-50');
+
+                // Grading Logic
+                if (q.selected === q.answer) {
+                    score++;
+                    $userSelectedBtn.removeClass('selected bg-white border-indigo-300').addClass('bg-emerald-500 text-white ring-4 ring-emerald-300 font-bold border-emerald-500');
+                    $feedback.html('<span class="text-emerald-600 font-bold">✅ Correct!</span>');
+                } else {
+                    if (q.selected) {
+                        $userSelectedBtn.removeClass('selected bg-white border-indigo-300').addClass('bg-red-500 text-white ring-4 ring-red-300 border-red-500');
+                        $feedback.html('<span class="text-red-600 font-bold">❌ Incorrect.</span>');
+                    }
+                    // Show correct answer
+                    $correctBtn.removeClass('bg-white border-indigo-300 text-gray-700').addClass('bg-yellow-400 text-gray-900 font-bold shadow-lg border-yellow-500');
+                }
+            });
+
+            // Update Score Display
+            $('#score-tally').text(score).removeClass('text-gray-400').addClass('text-yellow-600');
+            $('#final-score').text(score);
+            
+            // Show Result View
+            const percentage = (score / quizQuestions.length) * 100;
+            let resultText = '';
+            if (percentage === 100) resultText = 'Perfect! You are a genius! 🌟';
+            else if (percentage >= 80) resultText = 'Awesome job! Very impressive. 👏';
+            else if (percentage >= 50) resultText = 'Good effort! Keep studying. 📚';
+            else resultText = 'Don\'t give up! Try again soon. 💪';
+
+            $('#feedback-message').html(`<span class="text-indigo-600 font-black">${resultText}</span>`);
+            
+            // Hide submit button, show result
+            $('#submit-container').slideUp(300);
+            $('#result-view').slideDown(500);
+            
+            // Scroll to result view
+            $('html, body').animate({ scrollTop: $(document).height() }, 1000);
+        });
+    </script>
+</body>
+</html>
